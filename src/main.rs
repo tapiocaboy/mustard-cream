@@ -4,7 +4,8 @@ use merlin::Transcript;
 use rand::thread_rng;
 
 fn main() {
-    ed25519::verify_random_u64_number();
+    // ed25519::verify_random_u64_number();
+    bellman::execute();
 }
 
 mod secp {
@@ -27,36 +28,7 @@ mod secp {
         };
 
         let mut prover_transcript = Transcript::new(b"SECP_TRANSCRIPT");
-
-        // let (proof, committed_value) = RangeProof::prove_single(
-        //     &bp_gens,
-        //     &pc_gens,
-        //     &mut prover_transcript,
-        //     secret_value,
-        //     &blinding,
-        //     32,
-        // )
-        // .expect("Error");
     }
-    //
-    // pub fn hash_to_scalar(data: &Vec<u8>) -> SecretKey {
-    //
-    //
-    //     let mut hasher = Sha256::new();
-    //     hasher.update(data);
-    //     let result = hasher.finalize();
-    //
-    //     let mut bytes = [0u8; 32];
-    //     bytes.copy_from_slice(&result);
-    //
-    //     SecretKey::from_slice(&bytes).expect("Invalid hash")
-    // }
-    //
-    // fn create_range_proof(secp: &Secp256k1, bp_gens: &BulletproofGens, transcript: &mut Transcript, value: &SecretKey) -> (Rangeproof, SecretKey) {
-    //     let proof = RangeProof::prove(secp, bp_gens, transcript, value, &SecretKey::random(&mut thread_rng())).expect("Failed to create range proof");
-    //     let committed_value = secp.commit(value, SecretKey::random(&mut thread_rng())).expect("Failed to commit value");
-    //     (proof, committed_value)
-    // }
 }
 
 mod ed25519 {
@@ -107,7 +79,7 @@ mod ed25519 {
             32,
         );
 
-        println!("results: {:?}", results);
+        println!("Bullet Proof results: {:?}", results);
         assert!(results.is_ok());
     }
 }
@@ -203,7 +175,7 @@ mod bellman {
             .collect())
     }
 
-    pub fn create_proof() {
+    pub fn execute() {
         use bls12_381::Scalar;
         // Initialize structure
         let alpha = Alpha {
@@ -235,6 +207,8 @@ mod bellman {
         let hash_bits = multipack::bytes_to_bits_le(&hash);
         let inputs: Vec<Scalar> = multipack::compute_multipacking(&hash_bits);
 
-        assert!(groth16::verify_proof(&pvk, &proof, &inputs).is_ok());
+        let result = groth16::verify_proof(&pvk, &proof, &inputs);
+        println!("Proof result: {:?}", result);
+        assert!(result.is_ok());
     }
 }
