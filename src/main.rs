@@ -1,6 +1,4 @@
-use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
-use curve25519_dalek_ng::scalar::Scalar;
-use merlin::Transcript;
+
 use rand::thread_rng;
 
 fn main() {
@@ -14,6 +12,9 @@ fn main() {
 // bulletproof numerics
 mod ed25519 {
     use super::*;
+    use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+    use curve25519_dalek_ng::scalar::Scalar;
+    use merlin::Transcript;
     use bincode::serialize;
     use bulletproofs::ProofError;
     use curve25519_dalek_ng::ristretto::CompressedRistretto;
@@ -24,6 +25,8 @@ mod ed25519 {
         pub committed_value: String,
         pub bit_size: usize,
         pub transcript_name: String,
+        pub gens_capacity: usize,
+        pub party_capacity: usize,
     }
 
     pub fn price(price: u64) {
@@ -32,6 +35,8 @@ mod ed25519 {
         let gens_capacity: usize = 64;
         let party_capacity: usize = 1;
 
+        // This changes for each verification request
+        // can use a UUID4 or hash of price + node_address + timestamp + received block number
         let transcript_name = b"ProverTranscript1";
 
         // These are the parameters for the curve
@@ -55,11 +60,13 @@ mod ed25519 {
         .unwrap();
 
         // Prepared by the source node which expected verification from a receiver's node
-
+        // This payload must communicate over the wire
         let creator_payload = ZKPReceiverPayload {
             committed_value: hex::encode(committed_value.to_bytes().to_vec()),
             bit_size,
             transcript_name: hex::encode(b"ProverTranscript1".to_vec()),
+            gens_capacity,
+            party_capacity,
         };
 
         println!("Creator Payload: {:?}", creator_payload);
@@ -84,10 +91,12 @@ mod ed25519 {
         let v_committed_value =
             CompressedRistretto::from_slice(&hex::decode(creator_payload.committed_value).unwrap());
         let mut v_transcript = Transcript::new(v_transcript_name);
+        let v_gens_capacity = creator_payload.gens_capacity;
+        let v_party_capacity = creator_payload.party_capacity;
 
         let verifier_pc_gens = PedersenGens::default();
-        let verifier_bp_gens = BulletproofGens::new(64, 1);
-        let mut verifier_transcript = Transcript::new(b"ProverTranscript1");
+        let verifier_bp_gens = BulletproofGens::new(v_gens_capacity, v_party_capacity);
+
 
         let results = verify_proof(
             proof,
@@ -426,6 +435,9 @@ mod bellman {
 
 mod secp {
     use super::*;
+    use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+    use curve25519_dalek_ng::scalar::Scalar;
+    use merlin::Transcript;
     use secp256k1::{rand::thread_rng, PublicKey, Secp256k1, SecretKey};
     use sha2::{Digest, Sha256};
     pub fn verify_struct() {
