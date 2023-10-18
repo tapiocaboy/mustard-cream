@@ -4,84 +4,178 @@ use merlin::Transcript;
 use rand::thread_rng;
 
 fn main() {
-    // ed25519::verify_random_u64_number();
+    let price = 100_000_000u64;
+    // Bullet proof range verification for prices
+    ed25519::price(price);
     // bellman::execute();
-    example::run();
+    // example::run();
 }
 
-mod secp {
-    use super::*;
-    use secp256k1::{rand::thread_rng, PublicKey, Secp256k1, SecretKey};
-    use sha2::{Digest, Sha256};
-    pub fn verify_struct() {
-        struct DTO {
-            pub attribute_one: Vec<u8>,
-            pub attribute_two: String,
-            pub attribute_three: u128,
-        }
-        let pc_gens = PedersenGens::default();
-        let secp = Secp256k1::new();
-        let bp_gens = BulletproofGens::new(64, 1);
-        let dto = DTO {
-            attribute_one: vec![1, 2, 3],
-            attribute_two: "Data Transfer Object".to_string(),
-            attribute_three: 1234567890,
-        };
-
-        let mut prover_transcript = Transcript::new(b"SECP_TRANSCRIPT");
-    }
-}
-
+// bulletproof numerics
 mod ed25519 {
     use super::*;
-    pub fn verify_random_u64_number() {
-        let pc_gens = PedersenGens::default();
-        let bp_gens = BulletproofGens::new(64, 1);
-        let secret_value = 1u64;
-        let blinding = Scalar::random(&mut thread_rng());
-        let mut prover_transcript = Transcript::new(b"ProverTranscript1");
+    use bincode::serialize;
+    use bulletproofs::ProofError;
+    use curve25519_dalek_ng::ristretto::CompressedRistretto;
+    use serde::{Deserialize, Serialize};
 
-        let (proof, committed_value) = RangeProof::prove_single(
+    #[derive(Clone, Serialize, Deserialize, Debug)]
+    pub struct ZKPReceiverPayload {
+        pub committed_value: String,
+        pub bit_size: usize,
+        pub transcript_name: String,
+    }
+
+    pub fn price(price: u64) {
+        // These should be constants in your application.
+        let bit_size: usize = 32;
+        let gens_capacity: usize = 64;
+        let party_capacity: usize = 1;
+
+        let transcript_name = b"ProverTranscript1";
+
+        // These are the parameters for the curve
+        // Construct these on sender's node
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(gens_capacity, party_capacity);
+        let blinding = Scalar::random(&mut thread_rng());
+
+        let mut prover_transcript = Transcript::new(transcript_name);
+
+        // Create a proof
+        // Since this is a price its a single proof
+        let (proof, committed_value) = create_single_proof(
+            price,
+            bit_size,
+            &pc_gens,
+            &bp_gens,
+            &blinding,
+            &mut prover_transcript,
+        )
+        .unwrap();
+
+        // Prepared by the source node which expected verification from a receiver's node
+
+        let creator_payload = ZKPReceiverPayload {
+            committed_value: hex::encode(committed_value.to_bytes().to_vec()),
+            bit_size,
+            transcript_name: hex::encode(b"ProverTranscript1".to_vec()),
+        };
+
+        println!("Creator Payload: {:?}", creator_payload);
+        /*
+        Send above as a JSON payload to the verifier
+        Example Play load (Send Values as hex encoded bytes)
+        "CreatorPayload: "{
+               "committed_value":"7084b49153cd2b959d127dc611f219b6ee231a105cc7f56657fb109d5fa1561a",
+               "bit_size":32,
+               "transcript_name":"50726f7665725472616e73637269707431"
+            }
+        */
+
+        // Verifier node can initiate these values
+        let v_transcript_name_bytes = hex::decode(creator_payload.transcript_name).unwrap();
+
+        let v_transcript_name: &'static [u8] =
+            Box::leak(v_transcript_name_bytes.into_boxed_slice());
+
+        // Construct required params in verifier node
+        let v_bit_size = creator_payload.bit_size;
+        let v_committed_value =
+            CompressedRistretto::from_slice(&hex::decode(creator_payload.committed_value).unwrap());
+        let mut v_transcript = Transcript::new(v_transcript_name);
+
+        let verifier_pc_gens = PedersenGens::default();
+        let verifier_bp_gens = BulletproofGens::new(64, 1);
+        let mut verifier_transcript = Transcript::new(b"ProverTranscript1");
+
+        let results = verify_proof(
+            proof,
+            v_bit_size,
+            &v_committed_value,
+            &mut v_transcript,
+            &verifier_pc_gens,
+            &verifier_bp_gens,
+        );
+
+        println!("Verified Results: {:?}", results);
+        assert!(results.is_ok());
+    }
+
+    /// Verify a single proof
+    /// # Arguments
+    /// * `proof` - Proof to be verified
+    /// * `v_bit_size` - Bit size of the price
+    /// * `v_committed_value` - Committed value
+    /// * `v_transcript` - Transcript
+    /// * `verifier_pc_gens` - Pedersen Gens
+    /// * `verifier_bp_gens` - Bulletproof Gens
+    /// # Returns
+    /// * `Result<(), ProofError>` - Result of the verification
+    fn verify_proof(
+        proof: RangeProof,
+        v_bit_size: usize,
+        v_committed_value: &CompressedRistretto,
+        mut v_transcript: &mut Transcript,
+        verifier_pc_gens: &PedersenGens,
+        verifier_bp_gens: &BulletproofGens,
+    ) -> Result<(), ProofError> {
+        proof.verify_single(
+            &verifier_bp_gens,
+            &verifier_pc_gens,
+            &mut v_transcript,
+            &v_committed_value,
+            v_bit_size,
+        )
+    }
+
+    /// Create a single proof
+    /// # Arguments
+    /// * `price` - Price to be verified
+    /// * `bit_size` - Bit size of the price
+    /// * `pc_gens` - Pedersen Gens
+    /// * `bp_gens` - Bulletproof Gens
+    /// * `blinding` - Blinding factor
+    fn create_single_proof(
+        price: u64,
+        bit_size: usize,
+        pc_gens: &PedersenGens,
+        bp_gens: &BulletproofGens,
+        blinding: &Scalar,
+        mut prover_transcript: &mut Transcript,
+    ) -> Result<(RangeProof, CompressedRistretto), ProofError> {
+        RangeProof::prove_single(
             &bp_gens,
             &pc_gens,
             &mut prover_transcript,
-            secret_value,
+            price,
             &blinding,
-            32,
+            bit_size,
         )
-        .expect("Error");
+    }
 
-        // Transfer the proof to the verifier
-        // parameters:
-        // 1. bp_gens: the BulletproofGens
-        // 2. pc_gens: the PedersenGens
-        // 3. verifier_transcript: the transcript
-        // 4. committed_value: the Pedersen commitment
-        // 5. used scalar value:- bit size
-        // 7. transcript name as a string
-        /*
-        Send above as a JSON payload to the verifier
-        Example Playload (Send Values as bytes)
-        {
-            "bp_gens": "BulletproofGens",
-            "pc_gens": "PedersenGens",
-            "verifier_transcript": "Transcript",
-            "committed_value": "Pedersen commitment",
-            "used_scalar_value": "bit size",
-            "transcript_name": "string"
+    pub fn verify_struct() {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub struct Alpha {
+            field_a: u128,
+            field_b: String,
+            field_c: Vec<u8>,
         }
-        */
-        let mut verifier_transcript = Transcript::new(b"ProverTranscript1");
-        let results = proof.verify_single(
-            &bp_gens,
-            &pc_gens,
-            &mut verifier_transcript,
-            &committed_value,
-            32,
-        );
 
-        println!("Bullet Proof results: {:?}", results);
-        assert!(results.is_ok());
+        let alpha = Alpha {
+            field_a: 0,
+            field_b: "".to_string(),
+            field_c: vec![],
+        };
+
+        let secrets = serialize(&alpha).unwrap();
+
+        let blindings: Vec<_> = (0..4).map(|_| Scalar::random(&mut thread_rng())).collect();
+        // let blinding = Scalar::random(&mut thread_rng());
+        let mut prover_transcript = Transcript::new(b"ProverTranscript1");
     }
 }
 mod example {
@@ -328,4 +422,53 @@ mod bellman {
         println!("Proof result: {:?}", result);
         assert!(result.is_ok());
     }
+}
+
+mod secp {
+    use super::*;
+    use secp256k1::{rand::thread_rng, PublicKey, Secp256k1, SecretKey};
+    use sha2::{Digest, Sha256};
+    pub fn verify_struct() {
+        struct DTO {
+            pub attribute_one: Vec<u8>,
+            pub attribute_two: String,
+            pub attribute_three: u128,
+        }
+        let pc_gens = PedersenGens::default();
+        let secp = Secp256k1::new();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let dto = DTO {
+            attribute_one: vec![1, 2, 3],
+            attribute_two: "Data Transfer Object".to_string(),
+            attribute_three: 1234567890,
+        };
+
+        let mut prover_transcript = Transcript::new(b"SECP_TRANSCRIPT");
+    }
+    /*
+    fn bulletproof(
+        secrets: Vec<u8>,
+        blindings: Vec<Scalar>,
+        bp_gens: &BulletproofGens,
+        pc_gens: &PedersenGens,
+        transcript: &mut Transcript,
+    ) -> (RangeProof, Scalar) {
+        let mut commitments = Vec::new();
+        for (secret, blinding) in secrets.iter().zip(blindings.iter()) {
+            let x = pc_gens.commit(Scalar::from(*secret), *blinding);
+            commitments.push(x);
+        }
+        let pc_gens = PedersenGens::default();
+        let (proof, committed_value) = RangeProof::prove_single(
+            &bp_gens,
+            &pc_gens,
+            transcript,
+            &blindings,
+            &commitments,
+        )
+            .expect("Failed to create range proof");
+
+        (proof, committed_value)
+    }
+    */
 }
